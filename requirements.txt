@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-dotenv
+langchain
+langchain-openai
+langchain-community
+pydantic
+llama-cloud-services
+llama-index-core
+openai
+numpy
+pandas
+qdrant-client
+langchain_community
