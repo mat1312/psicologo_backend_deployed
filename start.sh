@@ -1,3 +1,4 @@
 #!/bin/bash
 echo "Starting Psicologo Virtuale API..."
-uvicorn main:app --host 0.0.0.0 --port $PORT 
+export PORT=${PORT:-8000}
+gunicorn main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT 
