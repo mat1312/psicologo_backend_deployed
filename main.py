@@ -20,7 +20,7 @@ import asyncio
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain_openai import ChatOpenAI
-from langchain_community.vectorstores import Qdrant
+from langchain_qdrant import Qdrant
 from langchain_openai import OpenAIEmbeddings
 from langchain.prompts import PromptTemplate
 from qdrant_client import QdrantClient
@@ -29,16 +29,41 @@ from qdrant_client import QdrantClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# FastAPI app
-app = FastAPI()
+# Fix deprecated on_event with lifespan
+from contextlib import asynccontextmanager
 
-# Import and include router from routes.py
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: nothing special needed
+    yield
+    # Shutdown: close connections
+    if supabase_client:
+        await supabase_client.close()
+
+# Import routes module (without initializing yet)
+routes_module = None
 try:
-    from routes import router
-    app.include_router(router)
-    logger.info("Successfully loaded patient routes from routes.py")
+    import routes
+    routes_module = routes
+    logger.info("Successfully imported routes module")
 except ImportError as e:
     logger.error(f"Failed to import patient routes: {e}")
+
+# Initialize the FastAPI app with lifespan
+app = FastAPI(title="Psicologo Virtuale API", lifespan=lifespan)
+
+# Configurazione CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # sviluppo locale frontend
+        "https://psico-virtuale.vercel.app",  # produzione frontend
+        "*"  # Per debug, rimuovere in produzione 
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Carica variabili d'ambiente
 load_dotenv()
@@ -434,22 +459,6 @@ async def save_mood_data(session_id: str, mood: str):
     except Exception as e:
         logger.error(f"Errore salvataggio umore: {str(e)}")
 
-# Inizializza FastAPI
-app = FastAPI(title="Psicologo Virtuale API")
-
-# Configurazione CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # sviluppo locale frontend
-        "https://psico-virtuale.vercel.app",  # produzione frontend
-        "*"  # Per debug, rimuovere in produzione 
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Sistema di prompt
 condense_question_prompt = PromptTemplate.from_template("""
 Data la seguente conversazione terapeutica e una domanda di follow-up, riformula la domanda
@@ -547,7 +556,7 @@ def get_vectorstore():
     # Inizializza gli embeddings
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     
-    # Crea e restituisci il vector store
+    # Crea e restituisci il vector store utilizzando il nuovo import da langchain_qdrant
     vector_store = Qdrant(
         client=client,
         collection_name=COLLECTION_NAME,
@@ -1321,13 +1330,6 @@ async def debug_token_endpoint(authorization: str = Header(None)):
     except Exception as e:
         return {"error": f"Errore nell'analisi del token: {str(e)}", "status": "error"}
 
-# Gestione chiusura applicazione
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Chiude le connessioni durante lo shutdown."""
-    if supabase_client:
-        await supabase_client.close()
-
 @app.get("/patients/{patient_id}/recommendations", response_model=ResourceResponse)
 async def patient_recommendations_endpoint(
     patient_id: str, 
@@ -1371,6 +1373,15 @@ async def public_recommendations_endpoint(session_id: Optional[str] = None):
         logger.error(f"Error in public recommendations: {str(e)}")
         # Return empty resources list as fallback
         return ResourceResponse(resources=[])
+
+# After all required functions are defined, initialize and include router
+if routes_module:
+    try:
+        router = routes_module.init_router(recommend_resources, verify_token)
+        app.include_router(router)
+        logger.info("Successfully loaded patient routes from routes.py")
+    except Exception as e:
+        logger.error(f"Failed to initialize patient routes: {e}")
 
 # Avvio dell'applicazione
 if __name__ == "__main__":
